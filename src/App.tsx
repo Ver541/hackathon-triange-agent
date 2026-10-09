@@ -6,6 +6,7 @@ import { SystemInstructionModal } from './components/SystemInstructionModal.tsx'
 import { SAMPLE_LOGS, SampleLog } from './data/sampleLogs.ts';
 import { TriageAnalysis, DefenseExecutionResult } from './types.ts';
 import { DEFAULT_SYSTEM_INSTRUCTION } from './constants.ts';
+import { parseCicIds2017Heuristic, simulateDefenseExecution } from './utils/cicIdsEngine.ts';
 import { ShieldCheck, AlertCircle, Terminal, Cpu, ArrowDown } from 'lucide-react';
 
 export default function App() {
@@ -14,6 +15,7 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysis, setAnalysis] = useState<TriageAnalysis | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeEngineName, setActiveEngineName] = useState<string>('gemini-3.8-flash');
 
   // SOAR Defense Execution State
   const [isExecutingDefense, setIsExecutingDefense] = useState<boolean>(false);
@@ -59,24 +61,42 @@ export default function App() {
     setDefenseResult(null);
 
     try {
-      const response = await fetch('/api/triage', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          logText: logText.trim(),
-          customInstruction: systemInstruction,
-        }),
-      });
+      let analysisResult: TriageAnalysis | null = null;
+      let engineUsed = 'gemini-3.8-flash';
 
-      const data = await response.json();
+      // 1. Try full-stack Express API first (AI Studio dev/prod environment)
+      try {
+        const response = await fetch('/api/triage', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            logText: logText.trim(),
+            customInstruction: systemInstruction,
+          }),
+        });
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to triage log with Gemini API');
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.success && data.analysis) {
+            analysisResult = data.analysis;
+            engineUsed = data.model || 'gemini-3.8-flash';
+          }
+        }
+      } catch (networkErr) {
+        // Expected when running purely client-side or statically hosted on GitHub Pages
+        console.info('Backend API unavailable (static environment); falling back to client-side engine.');
       }
 
-      setAnalysis(data.analysis);
+      // 2. If backend is not available (e.g. GitHub Pages static hosting or offline)
+      if (!analysisResult) {
+        analysisResult = parseCicIds2017Heuristic(logText.trim());
+        engineUsed = 'CIC-IDS2017 Baseline Engine (Static Mode)';
+      }
+
+      setAnalysis(analysisResult);
+      setActiveEngineName(engineUsed);
 
       // Scroll smoothly down to the result card for presentation focus
       setTimeout(() => {
@@ -99,21 +119,34 @@ export default function App() {
     setIsExecutingDefense(true);
 
     try {
-      const response = await fetch('/api/execute-defense', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(analysis.defenseExecutionPayload),
-      });
+      let resultData: DefenseExecutionResult | null = null;
 
-      const data = await response.json();
+      // 1. Try backend SOAR API endpoint
+      try {
+        const response = await fetch('/api/execute-defense', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(analysis.defenseExecutionPayload),
+        });
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Defense execution failed');
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.success) {
+            resultData = data;
+          }
+        }
+      } catch (err) {
+        console.info('Backend defense execution unavailable; using client-side simulator.');
       }
 
-      setDefenseResult(data);
+      // 2. Fallback to client-side simulation for GitHub Pages static hosting
+      if (!resultData) {
+        resultData = simulateDefenseExecution(analysis.defenseExecutionPayload);
+      }
+
+      setDefenseResult(resultData);
     } catch (err: any) {
       console.error('Execute error:', err);
       alert(`Defense execution failed: ${err?.message || 'Unknown error'}`);
@@ -224,7 +257,7 @@ export default function App() {
                 </span>
               </div>
               <span className="text-xs font-mono text-slate-500">
-                gemini-3.8-flash · 4-Phase Output
+                {activeEngineName} · 4-Phase Output
               </span>
             </div>
 

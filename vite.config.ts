@@ -1,10 +1,16 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { fileURLToPath } from 'url';
+import { defineConfig } from 'vite';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(() => {
   return {
+    // Relative base path ensures assets resolve correctly on GitHub Pages (e.g. /<repo-name>/)
+    // as well as custom domains and local previews without 404 white screens.
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
@@ -20,3 +26,4 @@ export default defineConfig(() => {
     },
   };
 });
+
